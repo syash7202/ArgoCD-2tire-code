@@ -1,108 +1,60 @@
 pipeline {
     agent any
-
+    
+    
     environment {
-        KUBECONFIG = '/var/lib/jenkins/.kube/config' 
+        BUILD_TAG = "$(BUILD_NUMBER)"
+    }
+    triggers {
+        githubPush()   
     }
 
     stages {
         stage('Checkout') {
             steps {
-                script {
-                    withCredentials([string(credentialsId: 'google-chat-url', variable: 'GOOGLE_CHAT_URL')]) {
-                        googlechatnotification url: "${GOOGLE_CHAT_URL}",
-                        message: "🔔 Build #${env.BUILD_NUMBER} for ${env.JOB_NAME} started."
+                withCredentials([usernamePassword(credentialsId: 'github-cred', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                    git branch: 'main', url: "https://${GIT_USER}:${GIT_PASS}@github.com/syash7202/ArgoCD-2tire-code.git"
+                }
+            }
+        }
+
+        stage('Build Docker Images') {
+            parallel {
+                stage('Frontend') {
+                    steps {
+                        dir('client') {
+                            withCredentials([usernamePassword(credentialsId: 'docker-hub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                                sh """
+                                    docker build -t ${DOCKER_USER}/client-app:${BUILD_TAG} .
+                                """
+                            }
+                        }
                     }
-                
                 }
-                git branch: 'main', credentialsId: 'git', url: 'git@bitbucket.org:aashka7240/jenkins-practice.git'
+                stage('Backend') {
+                    steps {
+                        dir('server') {
+                            withCredentials([usernamePassword(credentialsId: 'docker-hub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                                sh """
+                                    docker build -t ${DOCKER_USER}/server-app:${BUILD_TAG} .
+                                """
+                            }
+                        }
+                    }
+                }
             }
         }
-        
-        stage('Docker Build') {
+
+        stage('Push Images to DockerHub') {
             steps {
-                 script {
-                    sh '''#!/bin/bash
-                    docker build -t aashkajain/backend:$BUILD_NUMBER ./server
-                    docker build -t aashkajain/frontend:$BUILD_NUMBER ./client
-                    '''
+                withCredentials([usernamePassword(credentialsId: 'docker-hub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh """
+                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                        docker push ${DOCKER_USER}/client-app:latest
+                        docker push ${DOCKER_USER}/server-app:latest
+                        docker logout
+                    """
                 }
-            }
-        }
-
-        stage('Push Docker Images') {
-            steps {
-
-                 script {
-            withCredentials([usernamePassword(credentialsId: 'dockerhub-registry-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                sh '''#!/bin/bash
-                docker login -u $DOCKER_USER -p $DOCKER_PASS
-                docker push aashkajain/backend:$BUILD_NUMBER
-                docker push aashkajain/frontend:$BUILD_NUMBER
-                '''
-            }
-        }   
-                
-            }
-        }
-
-        
-        
-        stage('Deploy to Kubernetes') {
-            steps {
-               script {
-                // Replace the BUILD_NUMBER placeholder with the actual build number
-                    sh '''#!/bin/bash
-                    sed -i "s/BUILD_NUMBER/${BUILD_NUMBER}/g" server/server-deployment.yaml
-                    sed -i "s/BUILD_NUMBER/${BUILD_NUMBER}/g" client/client-deployment.yaml
-
-                    cat client/client-deployment.yaml
-                    cat server/server-deployment.yaml
-
-
-
-                    kubectl apply -f server/server-deployment.yaml
-                    kubectl apply -f server/server-service.yaml
-                    kubectl apply -f client/client-deployment.yaml
-                    kubectl apply -f client/client-service.yaml
-                    kubectl rollout restart deploy client-deployment
-                    kubectl rollout restart deploy server-deployment
-                    '''
-                }
-            }
-        }
-    }
-    
-    post {
-        always {
-            script {
-                def log = currentBuild.rawBuild.getLog(100).join('\n')
-                writeFile file: 'console.log', text: log
-                
-            }
-        }
-         success {
-            script {
-                def log = readFile('console.log')
-                withCredentials([string(credentialsId: 'google-chat-url', variable: 'GOOGLE_CHAT_URL')]) {
-                    def message = "✅ ${env.JOB_NAME} : Build #${env.BUILD_NUMBER} - ${currentBuild.currentResult}: Check output at ${env.BUILD_URL}\n\nLog:\n${log.take(4000)}"
-                    echo "Google Chat URL: ${GOOGLE_CHAT_URL}"
-                    googlechatnotification url: "${GOOGLE_CHAT_URL}",
-                    message: message
-                }
-                cleanWs()
-            }
-        }
-        failure {
-            script {
-                def log = readFile('console.log')
-                withCredentials([string(credentialsId: 'google-chat-url', variable: 'GOOGLE_CHAT_URL')]) {
-                    def message = "❌ ${env.JOB_NAME} : Build #${env.BUILD_NUMBER} - ${currentBuild.currentResult}: Check output at ${env.BUILD_URL}\n\nLog:\n${log.take(4000)}"
-                    echo "Google Chat URL: ${GOOGLE_CHAT_URL}"
-                    googlechatnotification url: "${GOOGLE_CHAT_URL}",
-                    message: message
-                }
-                cleanWs()
             }
         }
     }
