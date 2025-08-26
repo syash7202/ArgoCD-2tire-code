@@ -3,7 +3,7 @@ pipeline {
     
     
     environment {
-        BUILD_TAG = "$(BUILD_NUMBER)"
+        BUILD_TAG = "${BUILD_NUMBER}"
     }
     triggers {
         githubPush()   
